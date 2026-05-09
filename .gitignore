@@ -1,0 +1,35 @@
+# Run artifacts older than 30 days are pruned by `make clean` but kept in git for diff history.
+# Add explicit ignores below if you adopt a different policy.
+
+# Local state for routines (cursor / last-seen markers).
+runs/.state/
+
+# Environment + secrets — never commit.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor / OS noise.
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+!.vscode/settings.json
+
+# Python (judge runner / fixture loaders).
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node (if any package.json lands).
+node_modules/
+.next/
+dist/
+build/
+
+# Eval cache (if a judge runtime caches results).
+.eval-cache/

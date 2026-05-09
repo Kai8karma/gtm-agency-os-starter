@@ -1,0 +1,77 @@
+# Eval — audit-mapper
+# Pattern 8: every agent has an eval file. CI blocks merge below threshold.
+
+agent: audit-mapper
+description: Maps a client's current state against the 18-pattern catalog and outputs a wave plan.
+
+judge:
+  model: claude-opus-4-7
+  prompt: |
+    You are grading a GTM agency audit report against the rubric.
+    The report should map a client to the 18-pattern catalog (docs/PATTERNS.md),
+    name top-3 leverage gaps with pattern citations, and propose ≤3 waves.
+    Score each rubric item 0–10. Return one overall score.
+
+pass_threshold: 8.0
+
+rubric:
+  - id: pattern_coverage
+    weight: 0.30
+    description: All 18 patterns scored ✗/⚠/✓ with evidence. Missing rows fail this check.
+  - id: top3_with_citations
+    weight: 0.25
+    description: Top 3 leverage gaps each cite a pattern number from the catalog.
+  - id: wave_discipline
+    weight: 0.20
+    description: ≤ 3 waves. Each wave has a falsifiable acceptance test. No 5-wave scope-padding.
+  - id: voice_match
+    weight: 0.15
+    description: No banned phrases (BRAND_GUIDELINES.md). Decision-first. Numeric impact.
+  - id: provenance
+    weight: 0.10
+    description: Footer present with agent name + ISO timestamp + pattern catalog SHA.
+
+fixtures:
+  - id: fix-1-greenfield
+    description: Brand-new agency with nothing in repo, Slack-only ops, manual outbound.
+    input:
+      client: example-greenfield
+      stack: ["slack", "manual outbound", "no CRM", "no repo"]
+      interview_notes: |
+        - 2-person team, founder + ops lead.
+        - Outbound is Apollo lists + Gmail mail-merge.
+        - No CI, no eval, no doctrine document.
+        - Want to scale to 5 clients in 6 months.
+    expected_signals:
+      - audit_must_score_at_least_15_patterns_as_absent
+      - top3_must_include_doctrine_pattern_1
+      - waves_must_lead_with_doctrine_then_agents
+
+  - id: fix-2-partial
+    description: Mid-size agency, has repo + CI, missing eval + per-client doctrine.
+    input:
+      client: example-partial
+      stack: ["github", "slack", "lemlist", "hubspot", "github actions"]
+      interview_notes: |
+        - 7-person team. Engineering-led founder.
+        - Outbound runs through Lemlist with one shared template.
+        - Has GitHub repo with code, no PLAN.md, no BRAND_GUIDELINES.md, no agents/.
+        - LLM calls inline in route handlers (Pattern 6 violation).
+    expected_signals:
+      - audit_must_flag_pattern_6_inline_llm
+      - audit_must_flag_pattern_4_missing_plan
+      - top3_must_include_pattern_8_eval_harness
+
+  - id: fix-3-mature
+    description: Mature agency, all 18 patterns partial-or-better, asking for quarterly tune-up.
+    input:
+      client: example-mature
+      stack: ["github", "slack", "clay", "lemlist", "hubspot", "sentry", "railway", "github actions", "husky"]
+      interview_notes: |
+        - 12-person team. Quarterly audit cadence already in place.
+        - All 18 patterns at ⚠ or ✓. Looking for the 3 highest-leverage tuning items.
+        - Reply-rate has dropped 22% vs. last quarter.
+    expected_signals:
+      - audit_must_avoid_recommending_already_present_patterns
+      - top3_must_be_tuning_not_greenfield
+      - waves_must_be_2_or_fewer

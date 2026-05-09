@@ -1,0 +1,80 @@
+# Eval — daily-digest
+agent: daily-digest
+description: 7am DM per owner. Shipped + slipped + due-today + meetings + Respond-tier inbound.
+
+judge:
+  model: claude-haiku-4-5
+  prompt: |
+    Grade the daily digest DM.
+    Rules:
+    - DM only. Channel post = automatic 0.
+    - Empty sections collapse.
+    - Slipped tasks quote days late.
+    - ≤ 30 lines.
+
+pass_threshold: 8.0
+
+rubric:
+  - id: dm_only
+    weight: 0.25
+    description: Output targets a Slack DM, not a channel.
+  - id: section_order
+    weight: 0.15
+    description: Shipped → Slipped → Due-today → Meetings → Respond-tier.
+  - id: slipped_pressure
+    weight: 0.15
+    description: Each slipped task quotes the days-late count.
+  - id: line_cap
+    weight: 0.10
+    description: ≤ 30 lines. Truncates with "+ N more — see <link>" if exceeded.
+  - id: collapse_empty
+    weight: 0.10
+    description: Empty sections do not appear (no "nothing to report" filler).
+  - id: voice_match
+    weight: 0.15
+    description: No banned phrases. Numeric. Decision-first.
+  - id: provenance
+    weight: 0.10
+    description: Footer with run path + eval result.
+
+fixtures:
+  - id: fix-1-busy-day
+    description: 3 shipped, 2 slipped, 4 due, 2 meetings, 1 Respond-tier.
+    input:
+      owner: kai
+      shipped_yesterday: 3
+      slipped: [{ task: "Send proposal to Lattice Mfg.", days_late: 2 },
+                { task: "Audit kickoff for Habersham", days_late: 1 }]
+      due_today: 4
+      meetings: 2
+      respond_tier: 1
+    expected_signals:
+      - dm_only_no_channel
+      - days_late_quoted
+      - 30_line_cap_respected
+
+  - id: fix-2-empty-day
+    description: Nothing slipped, no Respond-tier, but 2 meetings + 3 due. Empty sections must collapse.
+    input:
+      owner: kai
+      shipped_yesterday: 1
+      slipped: []
+      due_today: 3
+      meetings: 2
+      respond_tier: 0
+    expected_signals:
+      - slipped_section_omitted
+      - respond_section_omitted
+
+  - id: fix-3-truncation
+    description: 47 due-today tasks. Must truncate with "+ N more" link.
+    input:
+      owner: kai
+      shipped_yesterday: 0
+      slipped: []
+      due_today: 47
+      meetings: 0
+      respond_tier: 0
+    expected_signals:
+      - truncation_link_present
+      - line_count_le_30

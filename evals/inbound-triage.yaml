@@ -1,0 +1,68 @@
+# Eval — inbound-triage
+agent: inbound-triage
+description: Classifies inbound replies into Respond/Nurture/Wait/Skip with confidence + cited evidence.
+
+judge:
+  model: claude-haiku-4-5
+  prompt: |
+    Grade the triage classification.
+    Rules:
+    - Tier name is one of Respond/Nurture/Wait/Skip. T1/T2/T3/T4 = automatic fail.
+    - Evidence is a quoted phrase from the reply.
+    - Confidence < 0.7 must escalate.
+
+pass_threshold: 8.0
+
+rubric:
+  - id: tier_naming
+    weight: 0.25
+    description: Action-oriented tier (Respond/Nurture/Wait/Skip). Numeric tiers = automatic 0.
+  - id: evidence_quoted
+    weight: 0.25
+    description: Reasoning quotes a phrase from the reply. No vibes-based tiering.
+  - id: confidence_handling
+    weight: 0.20
+    description: Confidence < 0.7 escalates with both top tiers offered to a human.
+  - id: routing_correctness
+    weight: 0.20
+    description: Routing matches the tier table (Respond → DM owner, Skip → log + close, etc.).
+  - id: provenance
+    weight: 0.10
+    description: Footer with tier + confidence + quoted evidence.
+
+fixtures:
+  - id: fix-1-buying-signal
+    description: Clear buying signal — should be Respond.
+    input:
+      reply_text: |
+        This is interesting. Send a calendar link for next week —
+        Tuesday or Thursday afternoon work.
+      sender: { name: "Anita L.", title: "VP Marketing", company: "Lattice Mfg." }
+    expected:
+      tier: Respond
+      confidence_min: 0.85
+      evidence_substring: "Send a calendar link"
+
+  - id: fix-2-not-now
+    description: Polite decline + open door — should be Nurture.
+    input:
+      reply_text: |
+        Appreciate the note. We're heads-down on a migration through Q3.
+        Worth picking up in October — feel free to ping me then.
+      sender: { name: "Devon M.", title: "Director RevOps", company: "Greenfield Cloud" }
+    expected:
+      tier: Nurture
+      confidence_min: 0.80
+      evidence_substring: "ping me then"
+
+  - id: fix-3-ooo
+    description: Out of office — should be Skip.
+    input:
+      reply_text: |
+        I'm out of office until 2026-05-20 with limited email access.
+        For urgent matters, contact ops@example.com.
+      sender: { name: "Lin H.", title: "Head of Sales", company: "Kettleridge" }
+    expected:
+      tier: Skip
+      confidence_min: 0.90
+      evidence_substring: "out of office"

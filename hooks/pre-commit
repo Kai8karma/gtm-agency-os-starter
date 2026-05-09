@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# pre-commit — Pattern 15.
+# Lightweight checks. Heavy checks (eval) live in pre-push and CI.
+#
+# Install once per clone:  ln -sf ../../hooks/pre-commit .git/hooks/pre-commit
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+fail=0
+err() { printf "  ✗ %s\n" "$1"; fail=$((fail + 1)); }
+
+staged() { git diff --cached --name-only --diff-filter=ACM; }
+
+# 1. No banned phrases in any staged markdown (committed prose).
+banned_pattern='(world-class|cutting-edge|game-changing|revolutionary|unleash|supercharge)'
+for f in $(staged | grep -E '\.md$' || true); do
+  # Skip the doctrine + brand files — they cite the banned list.
+  case "$f" in
+    CLAUDE.md|BRAND_GUIDELINES.md|hooks/pre-commit|scripts/verify.sh) continue ;;
+  esac
+  if grep -inE "$banned_pattern" "$f" >/dev/null; then
+    err "$f contains banned marketing phrase(s) — see BRAND_GUIDELINES.md"
+    grep -inE "$banned_pattern" "$f" | sed 's/^/      /'
+  fi
+done
+
+# 2. No new agent without a paired eval.
+for f in $(staged | grep -E '^agents/.+\.md$' || true); do
+  name=$(basename "$f" .md)
+  if [[ ! -f "evals/$name.yaml" ]]; then
+    err "agents/$name.md added without evals/$name.yaml — Pattern 8"
+  fi
+done
+
+# 3. No file directly inside runs/ (must be runs/<date>/).
+for f in $(staged | grep -E '^runs/[^/]+$' || true); do
+  case "$f" in
+    runs/.gitkeep|runs/.state*) continue ;;
+    *) err "$f committed at top of runs/; use runs/<date>/<artifact>.md" ;;
+  esac
+done
+
+# 4. Hard scope-blocker: no committing to clients/_example/runs (template only).
+for f in $(staged | grep -E '^clients/_example/runs/' || true); do
+  err "$f — _example client is template-only; do not commit run artifacts here"
+done
+
+if [[ $fail -gt 0 ]]; then
+  echo ""
+  echo "pre-commit: FAIL ($fail issue(s))"
+  exit 1
+fi
+
+exit 0

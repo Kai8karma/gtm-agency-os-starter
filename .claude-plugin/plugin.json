@@ -1,0 +1,37 @@
+{
+  "name": "gtm-agency-os",
+  "version": "0.1.0",
+  "description": "GTM Agency OS — 5-layer doctrine + 5 reference agents + per-client routines for B2B GTM engineering agencies.",
+  "author": {
+    "name": "kai8karma",
+    "url": "https://kaikarma.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/kai8karma/gtm-agency-os-starter",
+  "agents": [
+    { "name": "audit-mapper",     "path": "agents/audit-mapper.md",     "eval": "evals/audit-mapper.yaml" },
+    { "name": "weekly-review",    "path": "agents/weekly-review.md",    "eval": "evals/weekly-review.yaml" },
+    { "name": "campaign-drafter", "path": "agents/campaign-drafter.md", "eval": "evals/campaign-drafter.yaml" },
+    { "name": "inbound-triage",   "path": "agents/inbound-triage.md",   "eval": "evals/inbound-triage.yaml" },
+    { "name": "daily-digest",     "path": "agents/daily-digest.md",     "eval": "evals/daily-digest.yaml" }
+  ],
+  "commands": [
+    { "name": "ops", "path": "commands/ops.md" }
+  ],
+  "routines": [
+    { "name": "daily-digest",             "path": "routines/daily-digest.md",             "schedule": "0 7 * * 1-5" },
+    { "name": "per-client-weekly-review", "path": "routines/per-client-weekly-review.md", "schedule": "0 7 * * 1" },
+    { "name": "task-cron",                "path": "routines/task-cron.md",                "schedule": "*/30 * * * 1-5" },
+    { "name": "inbound-triage-cron",      "path": "routines/inbound-triage-cron.md",      "schedule": "*/15 9-18 * * 1-5" }
+  ],
+  "doctrine": {
+    "root": "CLAUDE.md",
+    "plan": "PLAN.md",
+    "brand": "BRAND_GUIDELINES.md",
+    "patterns": "docs/PATTERNS.md"
+  },
+  "verification": {
+    "command": "make verify",
+    "ci": ".github/workflows/eval-gate.yml"
+  }
+}

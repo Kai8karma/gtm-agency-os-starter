@@ -1,0 +1,74 @@
+# Eval — weekly-review
+agent: weekly-review
+description: Per-client weekly review. Skips dormant clients. DMs the owner — never the channel.
+
+judge:
+  model: claude-haiku-4-5
+  prompt: |
+    Grade this weekly-review artifact.
+    Rules:
+    - Verdict is exactly one paragraph and decision-first.
+    - All metrics are numeric, never adjectival.
+    - Top-3 actions each have a named owner + falsifiable acceptance test.
+    - Provenance footer present.
+
+pass_threshold: 8.0
+
+rubric:
+  - id: skip_correctness
+    weight: 0.25
+    description: Dormant-client fixture must produce skip-and-exit-0, not a noisy review.
+  - id: numeric_leadership
+    weight: 0.20
+    description: Verdict and metrics lead with numbers, not adjectives.
+  - id: owner_routing
+    weight: 0.20
+    description: DM target is owner_slack_id from client.md. Never #channel.
+  - id: actions_have_owners
+    weight: 0.15
+    description: Each top-3 next-week action has an owner + a measurable acceptance test.
+  - id: voice_match
+    weight: 0.10
+    description: No banned phrases. Decision-first. Sentence-case headers.
+  - id: provenance
+    weight: 0.10
+    description: Footer present with run path + eval result.
+
+fixtures:
+  - id: fix-1-active
+    description: Client with active campaigns, healthy reply rate, one slipped task.
+    input:
+      client: example-active
+      campaigns_modified_last_14d: 3
+      runs_last_7d: 5
+      metrics: { sent: 412, delivered: 401, opens: 198, replies: 47, booked: 11 }
+      slipped_tasks: 1
+    expected_signals:
+      - verdict_present
+      - top3_actions_each_have_owner
+      - dm_targets_owner_not_channel
+
+  - id: fix-2-dormant
+    description: Client paused. No campaigns active in 21 days. Should skip.
+    input:
+      client: example-dormant
+      campaigns_modified_last_14d: 0
+      runs_last_7d: 0
+      pause_flag: false
+    expected_signals:
+      - exit_code_0
+      - no_slack_dm_sent
+      - skip_logged_to_runs_skipped_log
+
+  - id: fix-3-anomaly
+    description: Active client. Reply rate dropped 38% week-over-week.
+    input:
+      client: example-anomaly
+      campaigns_modified_last_14d: 4
+      runs_last_7d: 6
+      metrics_this_week: { sent: 380, replies: 14 }
+      metrics_last_week: { sent: 372, replies: 22 }
+    expected_signals:
+      - anomaly_called_out_in_top_3
+      - mitigation_proposed_with_owner
+      - dm_priority_marked_high

@@ -1,0 +1,86 @@
+# Eval — campaign-drafter
+agent: campaign-drafter
+description: Drafts cold outbound + follow-ups. Voice-match against client brand card. PUBL-01 (no auto-send).
+
+judge:
+  model: claude-sonnet-4-6
+  prompt: |
+    You are grading B2B cold outbound copy.
+    Apply BRAND_GUIDELINES.md and the per-client client.md.
+    Penalize: banned phrases, multiple CTAs, generic personalization,
+    subject > 6 words on first touch, any auto-send.
+
+pass_threshold: 8.0
+
+rubric:
+  - id: subject_discipline
+    weight: 0.15
+    description: First-touch subject ≤ 6 words. Follow-ups ≤ 8.
+  - id: word_count
+    weight: 0.10
+    description: First-touch body ≤ 90 words.
+  - id: one_cta
+    weight: 0.20
+    description: Exactly one CTA per touch. Two CTAs = automatic fail.
+  - id: personalization_verifiable
+    weight: 0.20
+    description: Personalization token references a verifiable signal (post, hire, funding, RFP). No "noticed your company is doing well."
+  - id: voice_match
+    weight: 0.20
+    description: No banned phrases. Voice matches BRAND_GUIDELINES.md + client override if present.
+  - id: no_auto_send
+    weight: 0.10
+    description: Output is a draft artifact + thread reply asking for approval. No send.
+  - id: provenance
+    weight: 0.05
+    description: Footer with PUBL-01 marker.
+
+fixtures:
+  - id: fix-1-saas-rfp
+    description: Mid-market SaaS prospect just posted an RFP for vendor consolidation.
+    input:
+      client: example-active
+      campaign: jrs-q2
+      prospect:
+        name: Priya N.
+        title: Director of RevOps
+        company: Northpoint Logistics
+        signal: "RFP posted on company site for vendor consolidation, dated 2026-04-22"
+      offer: "30-min teardown of their current outbound stack."
+    expected_signals:
+      - subject_le_6_words
+      - one_cta_only
+      - personalization_cites_rfp_date
+      - no_banned_phrases
+
+  - id: fix-2-funding
+    description: Series B announced 2 days ago. Hiring revops lead.
+    input:
+      client: example-active
+      campaign: signal-evergreen
+      prospect:
+        name: Marco T.
+        title: VP Revenue
+        company: Tessellate AI
+        signal: "Series B $24M announced 2026-05-08, hiring revops lead"
+      offer: "Audit current GTM stack pre-onboarding the new revops hire."
+    expected_signals:
+      - personalization_cites_funding_date
+      - body_le_90_words
+      - sequence_includes_3_followups
+
+  - id: fix-3-banned-phrase-trap
+    description: Adversarial — campaign brief contains "world-class" and "supercharge" in the offer line. Agent should strip them.
+    input:
+      client: example-active
+      campaign: champion-winback
+      prospect:
+        name: Joon P.
+        title: CRO
+        company: Habersham Industries
+        signal: "LinkedIn post 2026-05-01 about RevOps being a bottleneck"
+      offer: "World-class outbound supercharge in 30 days."
+    expected_signals:
+      - banned_phrases_stripped_from_output
+      - offer_rewritten_in_voice
+      - personalization_cites_linkedin_post

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# pre-push — Pattern 15 + Pattern 16.
+# Server-side eval gate runs in CI; this is the local mirror so failures
+# surface before the push instead of after.
+#
+# Install once per clone:  ln -sf ../../hooks/pre-push .git/hooks/pre-push
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+echo "pre-push: running make verify + make eval"
+
+if ! make verify; then
+  echo ""
+  echo "pre-push: verify FAILED — fix issues above before pushing"
+  exit 1
+fi
+
+if ! make eval; then
+  echo ""
+  echo "pre-push: eval FAILED — see scripts/run-evals.sh output"
+  exit 1
+fi
+
+echo ""
+echo "pre-push: PASS"
+exit 0
