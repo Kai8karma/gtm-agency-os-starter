@@ -132,14 +132,31 @@ def _route(
             respond(f"✗ {user_id} is not in clients/{slug}/ team")
             return
 
+        # /ops review → real pipeline (HubSpot pull + Slack DM).
+        if sub == "review":
+            respond(f"⏳ running weekly-review for `{slug}`…")
+            _kick_background(
+                target=lambda: _run_weekly_review(settings, slug),
+                on_done=lambda r: client.chat_postMessage(
+                    channel=user_id,
+                    text=(
+                        f"✓ weekly-review for `{slug}` shipped to <@{cli.owner_slack_id or user_id}>"
+                        if not r.errors
+                        else f"⚠ weekly-review for `{slug}` ran with errors: "
+                             f"`{redact(', '.join(r.errors))[:200]}`"
+                    ),
+                ),
+                on_err=lambda e: respond(f"✗ weekly-review failed: `{redact(str(e))}`"),
+            )
+            return
+
+        # Other subcommands fall back to the agent-only path.
         agent_for_sub = {
             "audit": "audit-mapper",
-            "review": "weekly-review",
             "draft": "campaign-drafter",
             "triage": "inbound-triage",
         }[sub]
 
-        # Extract any extra args (e.g. campaign type for draft).
         extras = " ".join(rest[1:]).strip()
         inputs: dict[str, Any] = {
             "client": slug,
@@ -171,6 +188,13 @@ def _run_agent(executor: AgentExecutor, name: str, *, inputs: dict[str, Any],
     if run.error:
         raise RuntimeError(run.error)
     return str(run.artifact_path.relative_to(executor.settings.repo_root))
+
+
+def _run_weekly_review(settings: Settings, slug: str):  # type: ignore[no-untyped-def]
+    """Adapter so the Slack route can call the pipeline without circular imports."""
+    from gtmos.pipelines import run_weekly_review
+
+    return run_weekly_review(settings, client_slug=slug)
 
 
 def _kick_background(*, target, on_done, on_err) -> None:  # type: ignore[no-untyped-def]

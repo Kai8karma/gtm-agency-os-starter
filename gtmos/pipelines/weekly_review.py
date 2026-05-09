@@ -1,0 +1,171 @@
+"""Weekly-review pipeline — REAL HubSpot pull → agent → Slack DM.
+
+This is the pipeline that proves "GTM OS, not just prompt template." The
+agent doesn't make up numbers — it gets fed engagement counts from the
+client's actual CRM, then writes the verdict, which goes to the client
+owner's actual Slack DM.
+
+Flow:
+  1. Load Settings + client doctrine override.
+  2. Skip if client.pause is true (Pattern 11).
+  3. Pull last-7-days engagement counts from HubSpot.
+  4. Pull recently-modified deals from HubSpot.
+  5. Run the weekly-review agent against the aggregated metrics.
+  6. DM the owner with the verdict (Slack chat_postMessage).
+  7. Optionally log a HubSpot note on the company's record.
+  8. Write the run artifact.
+
+Failure modes are explicit — connector errors degrade gracefully with a
+text marker, never silently swallow.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+from gtmos.agents import AgentExecutor
+from gtmos.clients import ClientFrontmatter, load_client
+from gtmos.config import Settings
+from gtmos.connectors import ConnectorError, ConnectorUnavailable
+from gtmos.connectors.hubspot import HubSpotClient
+from gtmos.connectors.slack import SlackMessenger
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class WeeklyReviewResult:
+    client_slug: str
+    skipped: bool = False
+    skip_reason: str = ""
+    metrics: dict[str, Any] = field(default_factory=dict)
+    deals: list[dict[str, Any]] = field(default_factory=list)
+    verdict_text: str = ""
+    slack_ts: str | None = None
+    artifact_path: str | None = None
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def succeeded(self) -> bool:
+        return not self.skipped and not self.errors and bool(self.verdict_text)
+
+
+def run_weekly_review(
+    settings: Settings,
+    *,
+    client_slug: str,
+    hubspot: HubSpotClient | None = None,
+    slack: SlackMessenger | None = None,
+    executor: AgentExecutor | None = None,
+    now: dt.datetime | None = None,
+) -> WeeklyReviewResult:
+    """Run the weekly review for one client. Connectors injectable for tests."""
+    when = (now or dt.datetime.now(tz=dt.UTC)).astimezone(dt.UTC)
+    since = when - dt.timedelta(days=7)
+    client = load_client(settings.repo_root, client_slug)
+    result = WeeklyReviewResult(client_slug=client.slug)
+
+    if client.pause:
+        result.skipped = True
+        result.skip_reason = "client.pause=true"
+        return result
+
+    # ---- 1. pull metrics + deals from HubSpot ------------------------------
+    metrics: dict[str, Any] = {
+        "since": since.isoformat(timespec="seconds"),
+        "until": when.isoformat(timespec="seconds"),
+    }
+    deals: list[dict[str, Any]] = []
+    hub_owner_id = client.tier_overrides.get("hubspot_owner_id") if isinstance(
+        client.tier_overrides, dict
+    ) else None
+
+    try:
+        hs = hubspot or HubSpotClient.from_settings(settings)
+    except ConnectorUnavailable as e:
+        result.errors.append(f"hubspot unavailable: {e}")
+        hs = None
+
+    if hs is not None:
+        try:
+            metrics["engagement"] = hs.engagement_counts(owner_id=hub_owner_id, since=since)
+        except ConnectorError as e:
+            result.errors.append(f"hubspot.engagement_counts failed: {e}")
+            metrics["engagement"] = {}
+        try:
+            deals = hs.search_deals(owner_id=hub_owner_id, since=since, limit=25)
+            metrics["deals_modified"] = len(deals)
+            metrics["pipeline_value"] = sum(d.get("amount", 0.0) for d in deals)
+        except (ConnectorError, ValueError) as e:
+            result.errors.append(f"hubspot.search_deals failed: {e}")
+            metrics["deals_modified"] = 0
+            metrics["pipeline_value"] = 0
+
+    result.metrics = metrics
+    result.deals = deals
+
+    # ---- 2. run the agent against the metrics ------------------------------
+    ex = executor or AgentExecutor.from_settings(settings)
+    agent_inputs: dict[str, Any] = {
+        "client": client.slug,
+        "client_name": client.name,
+        "since": since.isoformat(timespec="seconds"),
+        "metrics": metrics,
+        "deals_sample": deals[:5],  # truncate to keep prompts cheap
+        "errors": result.errors,
+    }
+    run = ex.run(
+        "weekly-review",
+        inputs=agent_inputs,
+        client_slug=client.slug,
+        task="weekly-review",
+    )
+    if run.error:
+        result.errors.append(f"agent error: {run.error}")
+        return result
+
+    result.verdict_text = run.output_text
+    result.artifact_path = str(
+        run.artifact_path.relative_to(settings.repo_root)
+    )
+
+    # ---- 3. DM the owner ---------------------------------------------------
+    if not client.owner_slack_id:
+        result.errors.append("client.owner_slack_id missing; cannot DM")
+        return result
+
+    try:
+        sm = slack or SlackMessenger.from_settings(settings)
+        provenance = (
+            f"Generated by `agents/weekly-review.md` for `{client.slug}` at "
+            f"{when.isoformat(timespec='seconds')}. Run: `{result.artifact_path}`."
+        )
+        body = _format_dm(client, metrics, run.output_text)
+        ack = sm.dm_user(user_id=client.owner_slack_id, text=body, provenance=provenance)
+        result.slack_ts = str(ack.get("ts") or "")
+    except ConnectorUnavailable as e:
+        result.errors.append(f"slack unavailable: {e}")
+    except ConnectorError as e:
+        result.errors.append(f"slack.dm failed: {e}")
+
+    return result
+
+
+def _format_dm(client: ClientFrontmatter, metrics: dict[str, Any], verdict: str) -> str:
+    eng = metrics.get("engagement") or {}
+    sent = eng.get("emails_sent", 0)
+    received = eng.get("emails_received", 0)
+    meetings = eng.get("meetings", 0)
+    deals_modified = metrics.get("deals_modified", 0)
+    pipeline_value = metrics.get("pipeline_value", 0)
+    pipeline_str = f"${pipeline_value:,.0f}" if pipeline_value else "$0"
+
+    return (
+        f"*Weekly review — {client.name} (`{client.slug}`)*\n"
+        f"• Emails sent: {sent} · received: {received}\n"
+        f"• Meetings: {meetings} · deals modified: {deals_modified} (pipeline {pipeline_str})\n"
+        f"\n*Verdict*\n{verdict}"
+    )

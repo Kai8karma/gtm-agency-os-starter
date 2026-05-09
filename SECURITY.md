@@ -92,6 +92,18 @@ Tests: `tests/test_tasks.py::TestSqlInjection`.
 | Agent edited without bumping eval threshold | Eval score regression > 0.5 fails CI (deferred to Wave 4) | `evals/`, `PLAN.md` |
 | Sensitive data in a run artifact | Redaction is automatic in `runs.py`; `runs/` directory excluded from git LFS, retained 14d in CI | `gtmos/runs.py`, `.github/workflows/eval-gate.yml` |
 
+### A7 — Connector / external-API risks
+
+| Attack | Mitigation | Code |
+|---|---|---|
+| Leaked secret in HubSpot/Slack error body | All 4xx/5xx error bodies pass through `redact()` before logging | `gtmos/connectors/base.py::HttpConnector.request` |
+| Open redirect on external 3xx response | `follow_redirects=False` on every connector httpx client | `gtmos/connectors/base.py` |
+| Runaway retry storm | Bounded `max_retries`; respects `Retry-After`; decorrelated jitter capped at 8s | `gtmos/connectors/base.py::_sleep_backoff` |
+| Wrong CRM contact resolved → message sent to wrong person | Pipeline contact lookup is by exact email match (`EQ`); no fuzzy fallback | `gtmos/connectors/hubspot.py::search_contacts` |
+| Auto-publish via low-confidence triage | Confidence gate (default 0.7) escalates to human DM instead of acting | `gtmos/pipelines/inbound_triage.py::DEFAULT_CONFIDENCE_GATE` |
+| Stub connector silently no-ops in prod | Stubs raise `ConnectorUnavailable` at `from_settings`, then `NotImplementedError` on every method | `gtmos/connectors/lemlist.py`, `gtmos/connectors/discovery.py` |
+| Slack message with prompt-injection content reflected to user | `redact()` runs on triage evidence + suggested-next before any DM render | `gtmos/pipelines/inbound_triage.py::_format_*` |
+
 ---
 
 ## Defense-in-depth checklist (per engagement fork)

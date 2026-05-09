@@ -27,15 +27,30 @@ $EDITOR BRAND_GUIDELINES.md  # your agency's voice
 make new-client SLUG=acme    # scaffold clients/acme/ from the template
 $EDITOR clients/acme/client.md
 
-# 4. Run something
-gtmos verify                          # same as `make verify`
-gtmos clients                         # list active clients
+# 4. Run something — pure agent (no integrations)
+gtmos verify
+gtmos clients
 gtmos run-agent weekly-review --client acme --input '{"client":"acme"}'
+
+# 5. Run something — REAL pipelines (HubSpot + Slack)
+# weekly-review pulls actual engagement counts and deal movement from HubSpot,
+# runs the agent against those numbers, and DMs the client owner.
+gtmos pipeline weekly-review --client acme
+
+# inbound-triage classifies a reply, writes a HubSpot activity,
+# and routes per tier (Respond → DM, Nurture → note + task, Skip → log).
+echo "Send a calendar link for Tuesday." | gtmos pipeline inbound-triage \
+  --client acme \
+  --from-email priya@northpoint.com \
+  --from-name "Priya N." \
+  --subject "Re: vendor consolidation"
+
+# 6. Local closed-loop ops
 gtmos tasks add --title "Send proposal" --owner U0KAI --client acme --due 2026-05-15T17:00:00-07:00
 gtmos tasks overdue                   # plan overdue DMs (Pattern 10)
 gtmos slack-app --port 3000           # serve Slack `/ops` handler
 
-# 5. Schedule routines (cron / Claude Routines / systemd, your call)
+# 7. Schedule routines (cron / Claude Routines / systemd, your call)
 gtmos routine per-client-weekly-review
 gtmos routine task-cron
 ```
@@ -55,7 +70,7 @@ gtmos routine task-cron
 ├── pyproject.toml             # gtmos package metadata + dev deps
 ├── Dockerfile                 # non-root runtime image
 ├── gtmos/                     # executable runtime (Python, ≥3.11)
-│   ├── config.py              # env loading + secret redaction filter
+│   ├── config.py              # env loading + capability gating + secret redactor
 │   ├── security.py            # Slack signature, slug + path validation, redaction
 │   ├── llm.py                 # Anthropic API wrapper (cached system prompt)
 │   ├── agents.py              # agent loader + executor
@@ -65,7 +80,16 @@ gtmos routine task-cron
 │   ├── tasks.py               # sqlite task store + closed-loop cron (Pattern 10)
 │   ├── routines.py            # routine dispatcher (per-client / per-owner / utility)
 │   ├── slack_app.py           # Slack Bolt app, signature-verified
-│   └── cli.py                 # `gtmos` command-line entrypoint
+│   ├── cli.py                 # `gtmos` command-line entrypoint
+│   ├── connectors/            # external-system clients
+│   │   ├── base.py            #   HTTP base with retry + redacted error reporting
+│   │   ├── hubspot.py         #   real HubSpot v3: search/log/note/task/engagement counts
+│   │   ├── slack.py           #   Slack chat_postMessage + conversations_open
+│   │   ├── lemlist.py         #   stub — wire per engagement
+│   │   └── discovery.py       #   Apollo / Clay stubs — wire per engagement
+│   └── pipelines/             # end-to-end ops loops (real CRM + Slack writes)
+│       ├── weekly_review.py   #   HubSpot pull → agent → Slack DM (Pattern 11)
+│       └── inbound_triage.py  #   reply → classify → CRM activity + Slack route (Pattern 12)
 ├── agents/                    # one file per agent role (Pattern 6)
 ├── evals/                     # one yaml per agent — required (Pattern 8)
 ├── commands/                  # Slack slash command specs (Pattern 2)
@@ -112,15 +136,31 @@ CI runs all of these on every PR. See `SECURITY.md` for the threat model and res
 
 ---
 
+## What's wired vs. what's stubbed
+
+This is the honest scope of v0.3:
+
+| Connector | Status | Where |
+|---|---|---|
+| Anthropic | wired | `gtmos/llm.py` |
+| HubSpot | **wired** (search contacts/deals, log email, create note + task, engagement counts) | `gtmos/connectors/hubspot.py` |
+| Slack — receive | wired (signed `/ops` handler) | `gtmos/slack_app.py` |
+| Slack — send | **wired** (chat_postMessage, conversations_open) | `gtmos/connectors/slack.py` |
+| Lemlist | stub — `NotImplementedError` | `gtmos/connectors/lemlist.py` |
+| Apollo | stub — `ConnectorUnavailable` | `gtmos/connectors/discovery.py` |
+| Clay | stub — `ConnectorUnavailable` | `gtmos/connectors/discovery.py` |
+| sqlite task store | wired (default) | `gtmos/tasks.py` |
+
+Pipelines that hit real systems end-to-end:
+
+- `pipelines/weekly_review.py` — pulls HubSpot engagement counts + deals, runs the agent, DMs the owner.
+- `pipelines/inbound_triage.py` — classifies a reply, writes a HubSpot activity, routes per tier (Pattern 12).
+
+Stubs fail closed at startup if the engagement requires them (`require=("lemlist",)`). Implementing a stub means subclassing the stub and wiring the API calls — interface contracts are documented in each stub file.
+
 ## Stack assumptions
 
-Defaults declared in `CLAUDE.md` § 4. Per-engagement overrides land in `docs/STACK_OVERRIDES.md`. The runtime currently wires:
-
-- **Anthropic API** — agent execution + judge
-- **Slack Bolt** — `/ops` slash command + bot DMs
-- **sqlite** — default task store (Notion is a documented alternative)
-- **Pydantic v2** — frontmatter validation
-- **GitHub Actions** — eval-gate + security CI
+Defaults declared in `CLAUDE.md` § 4. Per-engagement overrides land in `docs/STACK_OVERRIDES.md`.
 
 ---
 

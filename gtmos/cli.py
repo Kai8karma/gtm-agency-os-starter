@@ -124,6 +124,25 @@ def _build_parser() -> argparse.ArgumentParser:
     s_slack.add_argument("--port", type=int, default=3000)
     s_slack.set_defaults(func=cmd_slack_app)
 
+    s_pipe = sub.add_parser("pipeline", help="run an end-to-end pipeline")
+    pipe_sub = s_pipe.add_subparsers(dest="pipeline_cmd", required=True)
+
+    s_review = pipe_sub.add_parser("weekly-review", help="HubSpot pull → agent → Slack DM")
+    s_review.add_argument("--client", required=True)
+    s_review.set_defaults(func=cmd_pipeline_weekly_review)
+
+    s_tri = pipe_sub.add_parser("inbound-triage", help="classify a reply + take action")
+    s_tri.add_argument("--client", required=True)
+    s_tri.add_argument("--from-email", required=True)
+    s_tri.add_argument("--from-name", default="")
+    s_tri.add_argument("--subject", default="")
+    s_tri.add_argument("--body", help="reply body text; reads stdin if omitted")
+    s_tri.add_argument("--thread-id", default="")
+    s_tri.add_argument(
+        "--gate", type=float, default=0.7, help="confidence gate; below → escalate"
+    )
+    s_tri.set_defaults(func=cmd_pipeline_inbound_triage)
+
     return p
 
 
@@ -149,7 +168,8 @@ def _settings(args: argparse.Namespace, *, require: tuple[str, ...] = ()) -> Set
 
 def cmd_verify(args: argparse.Namespace) -> int:
     # Verify is a pure static check — don't gate on an API key.
-    os.environ.setdefault("ANTHROPIC_API_KEY", "offline-mode-placeholder")
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        os.environ["ANTHROPIC_API_KEY"] = "offline-mode-placeholder"
     settings = _settings(args)
     root = settings.repo_root
 
@@ -186,8 +206,10 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
     if offline:
         # Stub a placeholder LLM key so Settings.load() doesn't reject. The
-        # judge code path is not exercised in this branch.
-        os.environ.setdefault("ANTHROPIC_API_KEY", "offline-mode-placeholder")
+        # judge code path is not exercised in this branch. setdefault is
+        # not enough — env var may exist as the empty string.
+        if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+            os.environ["ANTHROPIC_API_KEY"] = "offline-mode-placeholder"
 
     settings = _settings(args)
 
@@ -325,9 +347,71 @@ def cmd_slack_app(args: argparse.Namespace) -> int:
     from gtmos.slack_app import build_app
 
     app = build_app(settings)
-    # slack_bolt's built-in adapter; production should sit behind a real WSGI/ASGI host.
     print(f"gtmos slack-app listening on http://{args.host}:{args.port}/slack/events")
     app.start(port=args.port, host=args.host)  # type: ignore[call-arg]
+    return 0
+
+
+def cmd_pipeline_weekly_review(args: argparse.Namespace) -> int:
+    settings = _settings(args, require=("hubspot", "slack"))
+    from gtmos.pipelines import run_weekly_review
+
+    validate_slug(args.client, allow_underscore_prefix=True)
+    result = run_weekly_review(settings, client_slug=args.client)
+    if result.skipped:
+        print(f"⏭  weekly-review skipped: {result.skip_reason}")
+        return 0
+    print(f"weekly-review for {result.client_slug}:")
+    print(f"  metrics:  {json.dumps(result.metrics, default=str)}")
+    print(f"  artifact: {result.artifact_path}")
+    if result.slack_ts:
+        print(f"  slack_ts: {result.slack_ts}")
+    if result.errors:
+        for e in result.errors:
+            print(f"  ⚠ {e}", file=sys.stderr)
+        return 1 if not result.succeeded else 0
+    return 0
+
+
+def cmd_pipeline_inbound_triage(args: argparse.Namespace) -> int:
+    settings = _settings(args, require=("hubspot", "slack"))
+    from gtmos.pipelines import InboundReply, run_inbound_triage
+
+    validate_slug(args.client, allow_underscore_prefix=True)
+
+    body = args.body
+    if body is None:
+        body = sys.stdin.read()
+    if not body or not body.strip():
+        print("--body is empty (and stdin is empty)", file=sys.stderr)
+        return 2
+
+    reply = InboundReply(
+        client_slug=args.client,
+        sender_email=args.from_email,
+        sender_name=args.from_name,
+        subject=args.subject,
+        body=body,
+        thread_id=args.thread_id,
+    )
+    result = run_inbound_triage(settings, reply, confidence_gate=args.gate)
+    print(
+        f"triage: tier={result.tier} conf={result.confidence:.2f} "
+        f"contact_id={result.contact_id or 'unresolved'} "
+        f"escalated={result.escalated}"
+    )
+    if result.evidence:
+        print(f"  evidence: {result.evidence[:200]!r}")
+    if result.artifact_path:
+        print(f"  artifact: {result.artifact_path}")
+    if result.hubspot_engagement_ids:
+        print(f"  hubspot:  {','.join(result.hubspot_engagement_ids)}")
+    if result.slack_ts:
+        print(f"  slack:    ts={result.slack_ts}")
+    if result.errors:
+        for e in result.errors:
+            print(f"  ⚠ {e}", file=sys.stderr)
+        return 1 if not result.succeeded else 0
     return 0
 
 

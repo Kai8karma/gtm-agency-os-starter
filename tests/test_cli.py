@@ -193,3 +193,112 @@ class TestUnknownSubcommand:
     ) -> None:
         with pytest.raises(SystemExit):
             main(["does-not-exist"])
+
+
+class TestPipelineSubcommands:
+    def test_inbound_triage_via_cli(
+        self, cli_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Set up a client + agent so the pipeline can run.
+        (cli_repo / "clients" / "acme").mkdir(parents=True, exist_ok=True)
+        (cli_repo / "clients" / "acme" / "client.md").write_text(
+            "---\nslug: acme\nname: Acme\nowner_slack_id: U0KAI\n---\n",
+            encoding="utf-8",
+        )
+        (cli_repo / "clients" / "acme" / "campaigns").mkdir(exist_ok=True)
+        (cli_repo / "clients" / "acme" / "runs").mkdir(exist_ok=True)
+        (cli_repo / "agents" / "inbound-triage.md").write_text(
+            "# Agent — inbound-triage\n\nThis stub agent file exists to pass "
+            "the executor minimum-content check during CLI pipeline tests.\n",
+            encoding="utf-8",
+        )
+        # Mark capabilities present.
+        monkeypatch.setenv("HUBSPOT_PRIVATE_APP_TOKEN", "pat-na1-" + "x" * 30)
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xo" + "xb-test-bot-token")
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", "sig")
+
+        # Stub the pipeline so the CLI path is what we test, not the network.
+        captured: dict[str, object] = {}
+
+        def fake_run(settings, reply, **kwargs):  # type: ignore[no-untyped-def]
+            captured["called"] = True
+            captured["client_slug"] = reply.client_slug
+            captured["sender_email"] = reply.sender_email
+            class _R:
+                client_slug = reply.client_slug
+                tier = "Skip"
+                confidence = 0.95
+                evidence = "out of office"
+                suggested_next = ""
+                contact_id = None
+                artifact_path = "runs/2026/x.md"
+                slack_ts = None
+                hubspot_engagement_ids: list[str] = []  # noqa: RUF012
+                errors: list[str] = []  # noqa: RUF012
+                escalated = False
+                @property
+                def succeeded(self) -> bool:
+                    return True
+            return _R()
+
+        monkeypatch.setattr("gtmos.pipelines.run_inbound_triage", fake_run)
+
+        rc = main([
+            "pipeline", "inbound-triage",
+            "--client", "acme",
+            "--from-email", "priya@example.com",
+            "--from-name", "Priya N.",
+            "--subject", "Re: vendor consolidation",
+            "--body", "I'm out of office until Monday.",
+        ])
+        assert rc == 0
+        assert captured.get("called") is True
+        assert captured.get("client_slug") == "acme"
+
+    def test_inbound_triage_rejects_empty_body(
+        self, cli_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HUBSPOT_PRIVATE_APP_TOKEN", "pat-na1-" + "x" * 30)
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xo" + "xb-test-bot-token")
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", "sig")
+        # stdin empty too
+        import io
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        rc = main([
+            "pipeline", "inbound-triage",
+            "--client", "acme",
+            "--from-email", "x@y.com",
+        ])
+        assert rc == 2
+
+    def test_weekly_review_via_cli(
+        self, cli_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (cli_repo / "clients" / "acme").mkdir(parents=True, exist_ok=True)
+        (cli_repo / "clients" / "acme" / "client.md").write_text(
+            "---\nslug: acme\nname: Acme\nowner_slack_id: U0KAI\n---\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HUBSPOT_PRIVATE_APP_TOKEN", "pat-na1-" + "x" * 30)
+        monkeypatch.setenv("SLACK_BOT_TOKEN", "xo" + "xb-test-bot-token")
+        monkeypatch.setenv("SLACK_SIGNING_SECRET", "sig")
+
+        def fake_run(settings, *, client_slug, **kwargs):  # type: ignore[no-untyped-def]
+            class _R:
+                client_slug = "acme"
+                skipped = False
+                skip_reason = ""
+                metrics = {"engagement": {"emails_sent": 1}}  # noqa: RUF012
+                deals: list = []  # noqa: RUF012
+                verdict_text = "ok"
+                slack_ts = "ts"
+                artifact_path = "runs/x.md"
+                errors: list[str] = []  # noqa: RUF012
+                @property
+                def succeeded(self) -> bool:
+                    return True
+            return _R()
+
+        monkeypatch.setattr("gtmos.pipelines.run_weekly_review", fake_run)
+        rc = main(["pipeline", "weekly-review", "--client", "acme"])
+        assert rc == 0
