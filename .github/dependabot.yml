@@ -1,0 +1,43 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - security
+    groups:
+      anthropic-stack:
+        patterns:
+          - "anthropic"
+          - "httpx"
+      pydantic-stack:
+        patterns:
+          - "pydantic*"
+      slack-stack:
+        patterns:
+          - "slack-*"
+      dev-tools:
+        patterns:
+          - "ruff"
+          - "mypy"
+          - "bandit"
+          - "pip-audit"
+          - "pytest*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci

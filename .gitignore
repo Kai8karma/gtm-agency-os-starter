@@ -33,3 +33,8 @@ build/
 
 # Eval cache (if a judge runtime caches results).
 .eval-cache/
+.coverage
+.venv/
+dist/
+*.egg-info/
+htmlcov/

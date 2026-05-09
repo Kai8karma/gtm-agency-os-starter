@@ -1,0 +1,87 @@
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly recheck — catches CVEs disclosed after merge.
+    - cron: "23 13 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  bandit:
+    name: bandit (static analysis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --upgrade pip
+      - run: pip install "bandit[toml]>=1.7,<2.0"
+      - run: bandit -r gtmos -c pyproject.toml
+
+  pip-audit:
+    name: pip-audit (CVE scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --upgrade pip
+      - run: pip install "pip-audit>=2.7,<3.0"
+      - name: Build wheel + install non-editable for strict audit
+        run: |
+          pip install build
+          python -m build --wheel
+          pip install dist/gtmos-*.whl
+      - name: Install dev deps (non-editable parent)
+        run: pip install pip-audit
+      - name: Audit installed packages for known CVEs
+        run: pip-audit --strict
+
+  ruff:
+    name: ruff (lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --upgrade pip
+      - run: pip install "ruff>=0.5,<1.0"
+      - run: ruff check gtmos tests
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history for secret scanning
+      - name: Install gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.4/gitleaks_8.21.4_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+      - run: gitleaks detect --redact --no-banner --source . --verbose
+
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q -m "not integration" --cov=gtmos --cov-fail-under=80

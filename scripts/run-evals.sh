@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # run-evals.sh — runs eval YAMLs against fixtures.
 #
-# This is a TEMPLATE runner. It performs structural checks (file pairing,
-# YAML well-formedness, fixture count, threshold sanity) and emits a result
-# summary. To wire actual LLM judging, install your judge runtime and
-# replace the JUDGE_STUB section.
+# Two modes (auto-selected):
+#   * judge — calls the gtmos.judge runner (real Anthropic API).
+#             Requires ANTHROPIC_API_KEY; falls through to structural otherwise.
+#   * structural — validates YAML shape, fixture count, rubric weights.
+#                 No API calls. Used by CI when secrets aren't wired.
 #
 # Usage:
-#   scripts/run-evals.sh              # all agents
-#   scripts/run-evals.sh weekly-review  # one agent
+#   scripts/run-evals.sh                  # all agents
+#   scripts/run-evals.sh weekly-review    # one agent
+#   GTMOS_OFFLINE=1 scripts/run-evals.sh  # force structural mode
 #
-# Exit 0 only if every requested eval passes structural + (if wired) judge checks.
+# Exit 0 only if every requested eval passes.
 
 set -euo pipefail
 
@@ -18,23 +20,41 @@ cd "$(dirname "$0")/.."
 
 target="${1:-all}"
 
-if [[ "$target" == "all" ]]; then
-  agents=$(ls agents/*.md 2>/dev/null | xargs -n1 basename | sed 's/\.md$//')
-else
-  agents="$target"
-fi
-
-if [[ -z "$agents" ]]; then
-  echo "✗ No agents found in agents/"
-  exit 2
-fi
-
 if ! command -v python3 >/dev/null 2>&1; then
   echo "✗ python3 required to run evals"
   exit 2
 fi
 
-python3 - "$@" <<PY
+# Activate venv if present.
+if [[ -f .venv/bin/activate ]]; then
+  # shellcheck disable=SC1091
+  source .venv/bin/activate
+fi
+
+# Decide mode.
+if [[ -z "${ANTHROPIC_API_KEY:-}" ]] || [[ "${GTMOS_OFFLINE:-}" == "1" ]]; then
+  mode="structural"
+else
+  mode="judge"
+fi
+
+echo "eval: mode=$mode target=$target"
+echo
+
+# Try the integrated runner via gtmos.cli first; fall back to structural-only
+# Python on bare clones that don't have the package installed yet.
+if python3 -c "import gtmos" 2>/dev/null; then
+  if [[ "$target" == "all" ]]; then
+    python3 -m gtmos.cli eval --mode "$mode"
+  else
+    python3 -m gtmos.cli eval "$target" --mode "$mode"
+  fi
+  exit $?
+fi
+
+# ---- bootstrap fallback: structural-only YAML check ------------------------
+
+python3 - "$@" <<'PY'
 import os, sys, glob
 
 try:
@@ -55,7 +75,7 @@ if not agents:
     sys.exit(2)
 
 failures = 0
-print(f"eval: running {len(agents)} agent(s)")
+print(f"eval: running {len(agents)} agent(s) (structural fallback)")
 print()
 
 for a in agents:
@@ -94,18 +114,12 @@ for a in agents:
     if not (0 < threshold <= 10):
         issues.append(f"pass_threshold {threshold} out of (0, 10]")
 
-    # === JUDGE_STUB ===========================================================
-    # Replace this block with your actual LLM judge invocation.
-    # For the starter template, structural pass = eval pass.
     score = 8.5 if not issues else 0.0
-    judged = "structural"
-    # ==========================================================================
-
     if issues:
         print(f"  ✗ {a}: {'; '.join(issues)}")
         failures += 1
     else:
-        print(f"  ✓ {a}: {len(fixtures)} fixtures, threshold {threshold}, score {score} ({judged})")
+        print(f"  ✓ {a}: {len(fixtures)} fixtures, threshold {threshold}, score {score} (structural)")
 
 print()
 if failures == 0:
