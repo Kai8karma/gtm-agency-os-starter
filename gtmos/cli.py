@@ -204,12 +204,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
         or not os.environ.get("ANTHROPIC_API_KEY", "").strip()
     )
 
-    if offline:
-        # Stub a placeholder LLM key so Settings.load() doesn't reject. The
-        # judge code path is not exercised in this branch. setdefault is
-        # not enough — env var may exist as the empty string.
-        if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
-            os.environ["ANTHROPIC_API_KEY"] = "offline-mode-placeholder"
+    if offline and not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        os.environ["ANTHROPIC_API_KEY"] = "offline-mode-placeholder"
 
     settings = _settings(args)
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
-
 import pytest
 
 from gtmos.connectors import ConnectorUnavailable
@@ -11,7 +9,14 @@ from gtmos.connectors.discovery import ApolloClientStub, ClayClientStub
 from gtmos.connectors.lemlist import LemlistClientStub
 
 
-class TestLemlistStub:
+class TestLemlistStubAlias:
+    """LemlistClientStub is now a deprecated alias for the real LemlistClient.
+
+    Real-client behavior is exercised in tests/test_lemlist.py. Here we just
+    confirm the alias still routes through the real subclass and that
+    fail-closed behavior on missing creds is preserved.
+    """
+
     def test_unavailable_without_token(self) -> None:
         class S:
             lemlist_api_key = None
@@ -24,14 +29,10 @@ class TestLemlistStub:
         c = LemlistClientStub.from_settings(S())
         assert c is not None
 
-    def test_methods_raise_not_implemented(self) -> None:
-        c = LemlistClientStub()
-        with pytest.raises(NotImplementedError):
-            c.add_to_sequence(sequence_id="seq", prospect_email="x@y.com")
-        with pytest.raises(NotImplementedError):
-            c.list_recent_replies(since=dt.datetime.now(tz=dt.UTC))
-        with pytest.raises(NotImplementedError):
-            c.pause_prospect(prospect_email="x@y.com", sequence_id="seq")
+    def test_alias_is_subclass_of_real_client(self) -> None:
+        from gtmos.connectors.lemlist import LemlistClient
+
+        assert issubclass(LemlistClientStub, LemlistClient)
 
 
 class TestDiscoveryStubs:
