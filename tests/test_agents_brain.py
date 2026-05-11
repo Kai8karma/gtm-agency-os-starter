@@ -51,10 +51,12 @@ def _setup(tmp_repo: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
 class _StubBrain(BrainBridge):
     """Minimal stub that records calls + returns canned data."""
 
-    def __init__(self) -> None:
+    def __init__(self, voice_text: str = "Kai voice: terse. Decision-first.") -> None:
         self.searches: list[str] = []
         self.useds: list[tuple[int, str]] = []
         self.outcomes: list[tuple[int, str, str]] = []
+        self.voice_calls = 0
+        self._voice = voice_text
 
     def search(  # type: ignore[override]
         self, query: str, *, limit: int = 5, min_confidence: float = 0.5
@@ -76,6 +78,10 @@ class _StubBrain(BrainBridge):
                 source_trust="core",
             ),
         ]
+
+    def voice_card(self) -> str:  # type: ignore[override]
+        self.voice_calls += 1
+        return self._voice
 
     def used(self, memory_id: int, context: str = "") -> int:  # type: ignore[override]
         self.useds.append((memory_id, context))
@@ -144,6 +150,78 @@ class TestRecallAndUsage:
         ex = _make_executor(settings, brain, "Verdict: ok.")
         run = ex.run("weekly-review", inputs={})
         assert run.error is None  # pipeline survives a brain outage
+
+
+def _add_voice_sensitive_agent(tmp_repo: Path, name: str) -> None:
+    (tmp_repo / "agents" / f"{name}.md").write_text(
+        f"# Agent — {name}\n\nVoice-sensitive stub long enough to clear the "
+        "minimum-content gate for the loader.\n",
+        encoding="utf-8",
+    )
+    (tmp_repo / "evals" / f"{name}.yaml").write_text(
+        yaml.safe_dump({
+            "agent": name,
+            "judge": {"model": "x", "prompt": "x"},
+            "pass_threshold": 8.0,
+            "rubric": [{"id": "x", "weight": 1.0, "description": "x"}],
+            "fixtures": [{"id": f"f{i}", "input": {}} for i in range(3)],
+        }),
+        encoding="utf-8",
+    )
+
+
+class TestVoiceCardInjection:
+    def test_voice_injected_for_voice_sensitive_agent(
+        self, tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = _setup(tmp_repo, monkeypatch)
+        _add_voice_sensitive_agent(tmp_repo, "campaign-drafter")
+        brain = _StubBrain(voice_text="Kai voice: terse, decision-first, no fluff.")
+
+        captured: dict[str, Any] = {}
+
+        class _CapturingLLM:
+            def complete(self, **kwargs: Any) -> LLMResponse:
+                captured["system"] = kwargs["system"]
+                return LLMResponse(
+                    text="draft body",
+                    model="claude-test",
+                    input_tokens=1,
+                    output_tokens=1,
+                    cache_read_tokens=0,
+                    cache_creation_tokens=0,
+                    stop_reason="end_turn",
+                )
+
+        ex = AgentExecutor(settings=settings, llm=_CapturingLLM(), brain=brain)  # type: ignore[arg-type]
+        run = ex.run("campaign-drafter", inputs={"campaign": "winter"})
+        assert run.error is None
+        assert brain.voice_calls == 1
+        assert "Voice fingerprint" in captured["system"]
+        assert "terse, decision-first" in captured["system"]
+
+    def test_voice_not_injected_for_unrelated_agent(
+        self, tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = _setup(tmp_repo, monkeypatch)
+        brain = _StubBrain()
+        ex = _make_executor(settings, brain, "ok")
+        ex.run("weekly-review", inputs={})
+        assert brain.voice_calls == 0
+
+    def test_voice_failure_falls_back_silently(
+        self, tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = _setup(tmp_repo, monkeypatch)
+        _add_voice_sensitive_agent(tmp_repo, "campaign-drafter")
+
+        class _NoVoice(_StubBrain):
+            def voice_card(self) -> str:  # type: ignore[override]
+                raise BrainError("brain voice down")
+
+        ex = _make_executor(settings, _NoVoice(), "ok")
+        run = ex.run("campaign-drafter", inputs={})
+        assert run.error is None  # pipeline survives missing voice card
 
 
 class TestOutcomeReporting:

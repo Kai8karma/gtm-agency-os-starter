@@ -138,25 +138,45 @@ CI runs all of these on every PR. See `SECURITY.md` for the threat model and res
 
 ## What's wired vs. what's stubbed
 
-This is the honest scope of v0.3:
+The honest scope of v0.4:
 
 | Connector | Status | Where |
 |---|---|---|
 | Anthropic | wired | `gtmos/llm.py` |
 | HubSpot | **wired** (search contacts/deals, log email, create note + task, engagement counts) | `gtmos/connectors/hubspot.py` |
-| Slack — receive | wired (signed `/ops` handler) | `gtmos/slack_app.py` |
+| Slack — receive | wired (signed `/ops` handler + signed webhook receiver) | `gtmos/slack_app.py`, `gtmos/webhooks.py` |
 | Slack — send | **wired** (chat_postMessage, conversations_open) | `gtmos/connectors/slack.py` |
-| Lemlist | stub — `NotImplementedError` | `gtmos/connectors/lemlist.py` |
+| Lemlist | **wired** (push, pause, resume, stop, replies, bounces, sender health) | `gtmos/connectors/lemlist.py` |
+| Webhook receiver | **wired** (FastAPI, HMAC-verified Lemlist + Slack + HubSpot v3) | `gtmos/webhooks.py` |
+| kai-brain bridge | **wired** (search, used, outcome, remember, voice_card) | `gtmos/brain.py` |
 | Apollo | stub — `ConnectorUnavailable` | `gtmos/connectors/discovery.py` |
 | Clay | stub — `ConnectorUnavailable` | `gtmos/connectors/discovery.py` |
 | sqlite task store | wired (default) | `gtmos/tasks.py` |
+| Multi-tenant runs / tasks / evals / secrets | **wired** | `gtmos/multi_tenant.py` |
+| Skill bridge (queue + inline whitelist) | **wired** | `gtmos/skill_bridge.py` |
 
 Pipelines that hit real systems end-to-end:
 
 - `pipelines/weekly_review.py` — pulls HubSpot engagement counts + deals, runs the agent, DMs the owner.
-- `pipelines/inbound_triage.py` — classifies a reply, writes a HubSpot activity, routes per tier (Pattern 12).
+- `pipelines/inbound_triage.py` — classifies a reply, writes a HubSpot activity, routes per tier (Pattern 12). Triggered by the Lemlist `emailsReplied` webhook dispatch.
 
-Stubs fail closed at startup if the engagement requires them (`require=("lemlist",)`). Implementing a stub means subclassing the stub and wiring the API calls — interface contracts are documented in each stub file.
+Brain flywheel:
+
+- `AgentExecutor` queries kai-brain before each LLM call, injects top-k recalled memories + (for voice-sensitive agents) the brain voice card.
+- Outputs containing `[[brain.applied: #ID]]` markers get logged via `brain used`. Downstream `report_outcome(executor, run, "win|loss|neutral")` backfills the verdict so confidence + decay re-weight the next recall.
+- Brain unavailable → pipelines proceed without the recall block; no hard dependency.
+
+Smoke harness (gated on real creds):
+
+```bash
+GTMOS_HUBSPOT_SMOKE=1 HUBSPOT_PRIVATE_APP_TOKEN=... python scripts/hubspot_smoke.py
+GTMOS_SLACK_SMOKE=1   SLACK_BOT_TOKEN=...  SLACK_SMOKE_CHANNEL=C... \
+  python scripts/slack_smoke.py
+```
+
+Both write a smoke-test artifact and clean up after themselves.
+
+Stubs fail closed at startup if the engagement requires them (`require=("apollo",)`). Implementing a stub means subclassing it and wiring the API calls — interface contracts are documented in each stub file.
 
 ## Stack assumptions
 
@@ -170,4 +190,4 @@ MIT. See [`LICENSE`](./LICENSE).
 
 ---
 
-**Provenance:** kai8karma, template version 0.2.
+**Provenance:** kai8karma, template version 0.4.

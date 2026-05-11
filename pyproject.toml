@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gtmos"
-version = "0.4.0"
+version = "0.4.1"
 description = "GTM Agency OS — doctrine + agents + eval harness + real HubSpot/Slack/Lemlist pipelines + webhook receiver + brain outcome flywheel."
 readme = "README.md"
 license = { text = "MIT" }

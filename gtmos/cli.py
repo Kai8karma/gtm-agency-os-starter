@@ -143,6 +143,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     s_tri.set_defaults(func=cmd_pipeline_inbound_triage)
 
+    s_sq = sub.add_parser("skill-queue", help="manage queued Claude Code skill requests")
+    sq_sub = s_sq.add_subparsers(dest="sq_cmd", required=True)
+
+    sq_list = sq_sub.add_parser("list", help="list pending skill-queue files")
+    sq_list.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    sq_list.set_defaults(func=cmd_skill_queue_list)
+
+    sq_show = sq_sub.add_parser("show", help="print a single queued request")
+    sq_show.add_argument("path")
+    sq_show.set_defaults(func=cmd_skill_queue_show)
+
+    sq_clear = sq_sub.add_parser("clear", help="delete a queued request after processing")
+    sq_clear.add_argument("path")
+    sq_clear.set_defaults(func=cmd_skill_queue_clear)
+
+    sq_run = sq_sub.add_parser(
+        "run-inline",
+        help="run a queued request inline (only whitelisted CLI-backed skills)",
+    )
+    sq_run.add_argument("path")
+    sq_run.set_defaults(func=cmd_skill_queue_run_inline)
+
     return p
 
 
@@ -408,6 +430,107 @@ def cmd_pipeline_inbound_triage(args: argparse.Namespace) -> int:
         for e in result.errors:
             print(f"  ⚠ {e}", file=sys.stderr)
         return 1 if not result.succeeded else 0
+    return 0
+
+
+def cmd_skill_queue_list(args: argparse.Namespace) -> int:
+    from gtmos.skill_bridge import SkillBridge
+
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        os.environ["ANTHROPIC_API_KEY"] = "offline-mode-placeholder"
+    settings = _settings(args)
+    bridge = SkillBridge(settings=settings)
+    pending = bridge.list_pending()
+
+    if args.json:
+        import json as _json
+
+        records = []
+        for p in pending:
+            try:
+                records.append(_json.loads(p.read_text(encoding="utf-8")))
+            except Exception as e:
+                records.append({"path": str(p), "error": str(e)})
+        print(_json.dumps(records, indent=2, default=str))
+        return 0
+
+    if not pending:
+        print("(skill-queue empty)")
+        return 0
+    for p in pending:
+        try:
+            import json as _json
+
+            data = _json.loads(p.read_text(encoding="utf-8"))
+            skill = data.get("skill", "?")
+            slug = data.get("client_slug") or "_"
+            print(f"  {p.name}  skill={skill}  client={slug}")
+        except Exception as e:
+            print(f"  {p.name}  (parse error: {e})")
+    return 0
+
+
+def cmd_skill_queue_show(args: argparse.Namespace) -> int:
+    p = Path(args.path)
+    if not p.is_file():
+        print(f"not a file: {p}", file=sys.stderr)
+        return 1
+    print(p.read_text(encoding="utf-8"))
+    return 0
+
+
+def cmd_skill_queue_clear(args: argparse.Namespace) -> int:
+    p = Path(args.path)
+    if not p.is_file():
+        print(f"not a file: {p}", file=sys.stderr)
+        return 1
+    if "skill-queue" not in str(p):
+        print(f"refusing to delete outside skill-queue/: {p}", file=sys.stderr)
+        return 2
+    p.unlink()
+    print(f"cleared {p.name}")
+    return 0
+
+
+def cmd_skill_queue_run_inline(args: argparse.Namespace) -> int:
+    from gtmos.skill_bridge import SkillBridge, SkillRequest
+
+    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+        os.environ["ANTHROPIC_API_KEY"] = "offline-mode-placeholder"
+    settings = _settings(args)
+
+    p = Path(args.path)
+    if not p.is_file():
+        print(f"not a file: {p}", file=sys.stderr)
+        return 1
+    import json as _json
+
+    try:
+        data = _json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"bad request JSON: {e}", file=sys.stderr)
+        return 2
+
+    req = SkillRequest(
+        skill=data.get("skill", ""),
+        args=data.get("args") or {},
+        client_slug=data.get("client_slug"),
+        requested_by=data.get("requested_by") or "cli",
+    )
+    bridge = SkillBridge(settings=settings)
+    if not bridge.can_run_inline(req.skill):
+        print(
+            f"skill {req.skill!r} not in inline whitelist; "
+            f"hand the queued JSON to your Claude Code session instead.",
+            file=sys.stderr,
+        )
+        return 3
+    try:
+        out = bridge.run_inline(req)
+    except (PermissionError, FileNotFoundError, NotImplementedError, ValueError) as e:
+        print(f"inline run failed: {e}", file=sys.stderr)
+        return 4
+    print(out)
     return 0
 
 

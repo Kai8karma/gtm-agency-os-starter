@@ -302,3 +302,82 @@ class TestPipelineSubcommands:
         monkeypatch.setattr("gtmos.pipelines.run_weekly_review", fake_run)
         rc = main(["pipeline", "weekly-review", "--client", "acme"])
         assert rc == 0
+
+
+# ---- skill-queue subcommand ------------------------------------------------
+
+
+class TestSkillQueueCLI:
+    def test_list_empty(self, cli_repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = main(["skill-queue", "list"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "empty" in out
+
+    def test_list_after_queue(
+        self, cli_repo: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gtmos.config import Settings
+        from gtmos.skill_bridge import SkillBridge, SkillRequest
+
+        settings = Settings.load()
+        bridge = SkillBridge(settings=settings)
+        bridge.queue(SkillRequest(skill="brain:search", args={"query": "foo"}))
+
+        rc = main(["skill-queue", "list"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "brain:search" in out
+
+    def test_list_json(self, cli_repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        from gtmos.config import Settings
+        from gtmos.skill_bridge import SkillBridge, SkillRequest
+
+        bridge = SkillBridge(settings=Settings.load())
+        bridge.queue(SkillRequest(skill="brand-voice:content-generation", args={"x": 1}))
+
+        rc = main(["skill-queue", "list", "--json"])
+        assert rc == 0
+        import json as _json
+
+        data = _json.loads(capsys.readouterr().out)
+        assert isinstance(data, list)
+        assert any(r.get("skill") == "brand-voice:content-generation" for r in data)
+
+    def test_show_and_clear(
+        self, cli_repo: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gtmos.config import Settings
+        from gtmos.skill_bridge import SkillBridge, SkillRequest
+
+        bridge = SkillBridge(settings=Settings.load())
+        p = bridge.queue(SkillRequest(skill="sales:enrich", args={"q": "x"}))
+
+        rc = main(["skill-queue", "show", str(p)])
+        assert rc == 0
+        assert "sales:enrich" in capsys.readouterr().out
+
+        rc = main(["skill-queue", "clear", str(p)])
+        assert rc == 0
+        assert not p.exists()
+
+    def test_clear_refuses_outside_queue(
+        self, cli_repo: Path, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "stray.json"
+        outside.write_text("{}", encoding="utf-8")
+        rc = main(["skill-queue", "clear", str(outside)])
+        assert rc == 2
+        assert outside.exists()  # NOT deleted
+
+    def test_run_inline_rejects_non_whitelisted(
+        self, cli_repo: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gtmos.config import Settings
+        from gtmos.skill_bridge import SkillBridge, SkillRequest
+
+        bridge = SkillBridge(settings=Settings.load())
+        p = bridge.queue(SkillRequest(skill="brand-voice:content-generation", args={}))
+
+        rc = main(["skill-queue", "run-inline", str(p)])
+        assert rc == 3  # not in inline whitelist

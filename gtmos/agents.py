@@ -36,7 +36,11 @@ _DOCTRINE_FILES = (
     "CLAUDE.md",
     "BRAND_GUIDELINES.md",
 )
-_AGENT_NAME_RE = __import__("re").compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+_AGENT_NAME_RE = _re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+
+# Agents that should receive the brain voice-fingerprint card before drafting.
+# Voice card costs one extra brain call; only inject for voice-sensitive agents.
+_VOICE_SENSITIVE_AGENTS = frozenset({"campaign-drafter", "daily-digest"})
 
 
 class AgentError(Exception):
@@ -202,6 +206,21 @@ class AgentExecutor:
                 "If you apply one, end your output with `[[brain.applied: "
                 "<id> — <one phrase>]]` so the outcome backfiller can attribute."
             )
+
+        if self.brain is not None and agent.name in _VOICE_SENSITIVE_AGENTS:
+            try:
+                voice = self.brain.voice_card()
+            except BrainError as e:
+                logger.warning("brain voice fetch failed (%s); falling back to BRAND_GUIDELINES.md",
+                               redact(str(e)))
+                voice = ""
+            if voice.strip():
+                system += (
+                    "\n\n## Voice fingerprint (brain — authoritative)\n"
+                    "Match this voice. If it contradicts BRAND_GUIDELINES.md, "
+                    "flag the contradiction in your output rather than picking "
+                    "silently.\n\n" + voice.strip()[:4000]
+                )
 
         user = self.user_message(inputs)
 
