@@ -57,7 +57,7 @@ jobs:
       # and remove `GTMOS_OFFLINE: "1"` above. Cost is per fixture × judge model.
       - name: Upload run artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-runs-${{ github.run_id }}
           path: runs/
