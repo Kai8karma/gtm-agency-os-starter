@@ -214,17 +214,16 @@ def run_inbound_triage(
             except (ConnectorError, ValueError) as e:
                 result.errors.append(f"hubspot.create_task failed: {e}")
 
-    elif result.tier == "Wait":
-        if hs and result.contact_id:
-            try:
-                note = hs.create_note(
-                    contact_id=result.contact_id,
-                    body=_format_wait_note(reply, result),
-                )
-                if note.get("id"):
-                    result.hubspot_engagement_ids.append(str(note["id"]))
-            except (ConnectorError, ValueError) as e:
-                result.errors.append(f"hubspot.create_note failed: {e}")
+    elif result.tier == "Wait" and hs and result.contact_id:
+        try:
+            note = hs.create_note(
+                contact_id=result.contact_id,
+                body=_format_wait_note(reply, result),
+            )
+            if note.get("id"):
+                result.hubspot_engagement_ids.append(str(note["id"]))
+        except (ConnectorError, ValueError) as e:
+            result.errors.append(f"hubspot.create_note failed: {e}")
 
     # tier == Skip → log + close, no CRM / Slack noise
 

@@ -36,15 +36,15 @@ jobs:
           python-version: "3.12"
       - run: pip install --upgrade pip
       - run: pip install "pip-audit>=2.7,<3.0"
-      - name: Build wheel + install non-editable for strict audit
-        run: |
-          pip install build
-          python -m build --wheel
-          pip install dist/gtmos-*.whl
-      - name: Install dev deps (non-editable parent)
-        run: pip install pip-audit
-      - name: Audit installed packages for known CVEs
-        run: pip-audit --strict
+      # gtmos itself is not on PyPI, so pip-audit cannot look it up and
+      # --strict fails on it (also with --skip-editable). Audit the exact
+      # set of third-party packages it installs instead.
+      - name: Install the project and its runtime dependencies
+        run: pip install -e .
+      - name: Freeze third-party dependencies
+        run: pip freeze --exclude-editable | grep -vE '^(-e|gtmos)' > requirements-audit.txt
+      - name: Audit them for known CVEs
+        run: pip-audit --strict --no-deps -r requirements-audit.txt
 
   ruff:
     name: ruff (lint)
@@ -56,7 +56,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install --upgrade pip
-      - run: pip install "ruff>=0.5,<1.0"
+      # Pinned: an unpinned linter adds rules between releases and turns a
+      # green branch red with no code change. Raise it on purpose.
+      - run: pip install "ruff==0.17.5"
       - run: ruff check gtmos tests
 
   gitleaks:

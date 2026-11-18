@@ -80,12 +80,16 @@ gtmos routine task-cron
 │   ├── tasks.py               # sqlite task store + closed-loop cron (Pattern 10)
 │   ├── routines.py            # routine dispatcher (per-client / per-owner / utility)
 │   ├── slack_app.py           # Slack Bolt app, signature-verified
+│   ├── webhooks.py            # FastAPI receiver, HMAC-verified (Lemlist, Slack, HubSpot v3)
+│   ├── brain.py               # kai-brain bridge: recall, voice card, outcome flywheel
+│   ├── multi_tenant.py        # per-tenant runs, tasks, evals and secrets
+│   ├── skill_bridge.py        # queue Claude Code skills as structured tasks
 │   ├── cli.py                 # `gtmos` command-line entrypoint
 │   ├── connectors/            # external-system clients
 │   │   ├── base.py            #   HTTP base with retry + redacted error reporting
 │   │   ├── hubspot.py         #   real HubSpot v3: search/log/note/task/engagement counts
 │   │   ├── slack.py           #   Slack chat_postMessage + conversations_open
-│   │   ├── lemlist.py         #   stub — wire per engagement
+│   │   ├── lemlist.py         #   real Lemlist: push, pause, resume, stop, replies, bounces, sender health
 │   │   └── discovery.py       #   Apollo / Clay stubs — wire per engagement
 │   └── pipelines/             # end-to-end ops loops (real CRM + Slack writes)
 │       ├── weekly_review.py   #   HubSpot pull → agent → Slack DM (Pattern 11)
@@ -98,6 +102,7 @@ gtmos routine task-cron
 ├── docs/                      # PATTERNS.md, STACK_OVERRIDES.md
 ├── runs/                      # agent run artifacts (output of pipelines)
 ├── tests/                     # pytest — security, agents, judge, routines, CLI
+├── skills/                    # Claude Code skill that loads the doctrine when installed as a plugin
 ├── hooks/                     # pre-commit / pre-push (Pattern 15)
 └── .github/workflows/         # eval-gate + security CI gates
 ```
@@ -135,6 +140,17 @@ If a piece of work doesn't fit one of these, it doesn't belong here.
 CI runs all of these on every PR. See `SECURITY.md` for the threat model and responsible-disclosure flow.
 
 ---
+
+## Use it as a Claude Code plugin
+
+The repository is also a valid Claude Code plugin. Installed that way it adds one skill, `gtm-agency-os:doctrine`, which loads `CLAUDE.md`, the brand card and the pattern catalog into a session. A `CLAUDE.md` at a plugin's root is not loaded on its own, which is why the skill exists.
+
+```bash
+claude plugin validate .        # passes; warnings only
+claude --plugin-dir .           # try it in a session
+```
+
+The files in `agents/` and `commands/` are prompts and Slack specs for the Python runtime, so they are not registered as Claude Code subagents or slash commands. Run them with the `gtmos` CLI.
 
 ## What's wired vs. what's stubbed
 
@@ -190,4 +206,4 @@ MIT. See [`LICENSE`](./LICENSE).
 
 ---
 
-**Provenance:** kai8karma, template version 0.4.
+**Provenance:** kai8karma, template version 0.4.1. See [CHANGELOG.md](./CHANGELOG.md) and [CONTRIBUTING.md](./CONTRIBUTING.md).
